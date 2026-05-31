@@ -1,0 +1,9 @@
+[package]
+name = "reanim_parser"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+quick-xml = "0.36"
+glam = "0.29"
+log = "0.4"

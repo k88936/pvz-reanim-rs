@@ -1,0 +1,11 @@
+[package]
+name = "reanim_renderer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+reanim_parser = { path = "../reanim_parser" }
+anyhow = "1"
+image = "0.25"
+glam = "0.29"
+log = "0.4"
