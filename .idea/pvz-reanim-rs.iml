@@ -8,6 +8,7 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/reanim_makefile_gen/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/PvZ-Portable" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
+      <excludeFolder url="file://$MODULE_DIR$/microsoft-vs-code-assets/reanim/.venv" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />

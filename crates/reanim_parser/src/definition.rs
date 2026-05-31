@@ -183,4 +183,20 @@ impl ReanimatorDefinition {
     pub fn frame_count(&self) -> i32 {
         self.tracks.first().map_or(0, |t| t.transforms.len() as i32)
     }
+
+    /// Returns the set of unique image names referenced by any track in this definition.
+    pub fn referenced_images(&self) -> Vec<String> {
+        let mut images: Vec<String> = Vec::new();
+        for track in &self.tracks {
+            for tx in &track.transforms {
+                if let Some(ref img) = tx.image {
+                    if !images.contains(img) {
+                        images.push(img.clone());
+                    }
+                }
+            }
+        }
+        images.sort();
+        images
+    }
 }

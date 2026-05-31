@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
+use rayon::prelude::*;
 use reanim_parser::*;
 use reanim_renderer::*;
 
@@ -11,6 +12,9 @@ struct Cli {
     reanim_file: PathBuf,
     /// Output GIF path (defaults to <reanim_stem>.gif)
     output: Option<PathBuf>,
+    /// Additional directories to scan for image files (may be repeated)
+    #[arg(long)]
+    images_src: Vec<PathBuf>,
 }
 
 fn main() {
@@ -39,7 +43,9 @@ fn main() {
 
     // Guess the image directory from the reanim file's location.
     let parent = cli.reanim_file.parent().unwrap_or(Path::new("."));
-    let images = ImageDb::from_directory(parent);
+    let mut image_dirs: Vec<&Path> = vec![parent];
+    image_dirs.extend(cli.images_src.iter().map(|p| p.as_path()));
+    let images = ImageDb::from_directories(&image_dirs);
 
     let masks = find_anim_masks(&def);
     if masks.is_empty() {
@@ -57,15 +63,22 @@ fn main() {
         for m in &masks {
             log::info!("  {}: frames {}-{}", m.name, m.frame_start, m.frame_end);
         }
-        for mask in &masks {
-            let output = output_base.with_extension(format!("{}.gif", mask.name));
-            log::info!("Rendering mask '{}' -> {}", mask.name, output.display());
-            if let Err(e) = render_range_to_gif(&def, &images, (100, 100), &output,
-                                                 mask.frame_start, mask.frame_end) {
+        let results: Vec<_> = masks
+            .par_iter()
+            .map(|mask| {
+                let output = output_base.with_extension(format!("{}.gif", mask.name));
+                log::info!("Rendering mask '{}' -> {}", mask.name, output.display());
+                render_range_to_gif(&def, &images, (100, 100), &output,
+                                     mask.frame_start, mask.frame_end)
+            })
+            .collect();
+
+        for (mask, result) in masks.iter().zip(results.iter()) {
+            if let Err(e) = result {
                 log::error!("Render error for '{}': {e}", mask.name);
                 std::process::exit(1);
             }
-            log::info!("Done: {}", output.display());
+            log::info!("Done: {}", mask.name);
         }
     }
 }

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::fs::File;
+use std::sync::OnceLock;
 
 use image::{RgbaImage, Rgba, Frame as ImageFrame};
 use image::codecs::gif::GifEncoder;
@@ -18,53 +19,94 @@ pub(crate) struct LoadedImage {
 
 // LoadedImage intentionally minimal; cel fields accessed directly.
 
-/// Image database: maps XML image refs -> loaded PNGs.
+/// Per-image lazy-load entry.
+struct ImageEntry {
+    path: PathBuf,
+    loaded: OnceLock<Option<LoadedImage>>,
+}
+
+/// Image database: maps XML image refs -> loaded PNGs (lazily loaded).
 pub struct ImageDb {
-    images: HashMap<String, LoadedImage>,
+    entries: HashMap<String, ImageEntry>,
 }
 
 impl ImageDb {
-    /// Build the database from a directory containing .png files.
-    /// `strip_prefix` (e.g. "IMAGE_REANIM_") is removed from XML refs before lookup.
-    pub fn from_directory(dir: &Path) -> Self {
-        let mut images = HashMap::new();
-        let entries = match std::fs::read_dir(dir) {
-            Ok(e) => e,
-            Err(_) => return Self { images },
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) != Some("png") {
-                continue;
-            }
-            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-            let lower = stem.to_lowercase();
-            let img_data = match image::open(&path) {
-                Ok(i) => i.to_rgba8(),
+    /// Build the database from one or more directories containing .png/.jpg files.
+    /// Later directories override earlier ones for same-key entries.
+    /// Images are **not** loaded eagerly — loading happens on first `get()` access.
+    pub fn from_directories(dirs: &[&Path]) -> Self {
+        let mut entries = HashMap::new();
+        for dir in dirs {
+            let read_dir = match std::fs::read_dir(dir) {
+                Ok(e) => e,
                 Err(_) => continue,
             };
-            let (w, h) = img_data.dimensions();
-            images.insert(lower, LoadedImage {
-                pixels: img_data,
-                cel_w: w,
-                cel_h: h,
-            });
+            for entry in read_dir.flatten() {
+                let path = entry.path();
+                let ext = match path.extension().and_then(|s| s.to_str()) {
+                    Some(e) => e,
+                    None => continue,
+                };
+                if ext != "png" && ext != "jpg" {
+                    continue;
+                }
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                let lower = stem.to_lowercase();
+                entries.insert(
+                    lower,
+                    ImageEntry {
+                        path,
+                        loaded: OnceLock::new(),
+                    },
+                );
+            }
         }
-        Self { images }
+        Self { entries }
+    }
+
+    /// Build the database from a single directory containing .png/.jpg files.
+    /// Images are **not** loaded eagerly — loading happens on first `get()` access.
+    pub fn from_directory(dir: &Path) -> Self {
+        Self::from_directories(&[dir])
     }
 
     /// Look up an XML image ref (e.g. "IMAGE_REANIM_BLOVER_HEAD").
+    /// Loads the image from disk on first access and caches it thereafter.
     pub(crate) fn get(&self, xml_ref: &str) -> Option<&LoadedImage> {
         for prefix in IMAGE_PREFIXES {
             if let Some(stripped) = xml_ref.strip_prefix(prefix) {
                 let key = stripped.to_lowercase();
-                if let Some(img) = self.images.get(&key) {
-                    return Some(img);
+                if let Some(entry) = self.entries.get(&key) {
+                    return entry
+                        .loaded
+                        .get_or_init(|| Self::load_image(&entry.path))
+                        .as_ref();
                 }
             }
         }
         // Try the whole ref lowercased as a last resort
-        self.images.get(&xml_ref.to_lowercase())
+        self.entries
+            .get(&xml_ref.to_lowercase())
+            .and_then(|entry| {
+                entry
+                    .loaded
+                    .get_or_init(|| Self::load_image(&entry.path))
+                    .as_ref()
+            })
+    }
+
+    /// Load a single image file from disk. Returns `None` if the file is corrupt.
+    fn load_image(path: &Path) -> Option<LoadedImage> {
+        let img_data = match image::open(path) {
+            Ok(i) => i.to_rgba8(),
+            Err(_) => return None,
+        };
+        let (w, h) = img_data.dimensions();
+        Some(LoadedImage {
+            pixels: img_data,
+            cel_w: w,
+            cel_h: h,
+        })
     }
 
     /// Return cel dimensions for an XML image ref, or a default.

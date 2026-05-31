@@ -13,3 +13,4 @@ reanim_renderer = { path = "crates/reanim_renderer" }
 clap = { version = "4", features = ["derive"] }
 env_logger = "0.11"
 log = "0.4"
+rayon = "1"

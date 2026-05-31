@@ -816,6 +816,7 @@ dependencies = [
  "clap",
  "env_logger",
  "log",
+ "rayon",
  "reanim_parser",
  "reanim_renderer",
 ]
