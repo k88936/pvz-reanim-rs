@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::fs::File;
 use std::sync::OnceLock;
 
 use image::{RgbaImage, Rgba, Frame as ImageFrame};
@@ -396,8 +395,9 @@ pub fn render_range_to_gif<P: AsRef<Path>>(
         bbox.center_off_x, bbox.center_off_y,
     );
 
-    let out = File::create(output.as_ref())?;
-    let mut encoder = GifEncoder::new(out);
+    // Buffer all frames in memory first, then flush to disk in one shot.
+    let mut buf = Vec::new();
+    let mut encoder = GifEncoder::new(std::io::Cursor::new(&mut buf));
     encoder.set_repeat(image::codecs::gif::Repeat::Infinite)?;
 
     for abs_idx in frame_start..=frame_end {
@@ -406,6 +406,10 @@ pub fn render_range_to_gif<P: AsRef<Path>>(
         encoder.encode_frame(frame)?;
         log::info!("Frame {}/{} (abs {})", abs_idx - frame_start + 1, range_len, abs_idx);
     }
+
+    // Drop the encoder to finalize the GIF trailer into buf, then write everything at once.
+    drop(encoder);
+    std::fs::write(output.as_ref(), &buf)?;
 
     Ok(())
 }
