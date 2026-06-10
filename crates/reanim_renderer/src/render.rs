@@ -437,7 +437,7 @@ fn build_animated_webp(
         anmf_data.extend_from_slice(&(width - 1).to_le_bytes()[..3]); // frame width - 1
         anmf_data.extend_from_slice(&(height - 1).to_le_bytes()[..3]); // frame height - 1
         anmf_data.extend_from_slice(&frame_duration_ms.to_le_bytes()[..3]); // frame duration (3 bytes)
-        anmf_data.push(0); // flags (no dispose, no blend)
+        anmf_data.push(0b0000_0010); // flags: dispose to background, no blend
 
         // VP8L sub-chunk inside the ANMF
         anmf_data.extend_from_slice(b"VP8L");
