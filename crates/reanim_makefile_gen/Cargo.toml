@@ -3,12 +3,11 @@ name = "reanim_makefile_gen"
 version = "0.1.0"
 edition = "2021"
 
-[[bin]]
+[lib]
 name = "reanim_makefile_gen"
-path = "src/main.rs"
+path = "src/lib.rs"
 
 [dependencies]
 reanim_parser = { path = "../reanim_parser" }
 reanim_renderer = { path = "../reanim_renderer" }
 anyhow = "1"
-clap = { version = "4", features = ["derive"] }

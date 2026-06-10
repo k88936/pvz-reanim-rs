@@ -2,31 +2,21 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use clap::Parser;
 use reanim_parser::ReanimatorDefinition;
 use reanim_renderer::find_anim_masks;
 
 /// Image filename prefixes that `ImageDb` strips during lookup.
-const IMAGE_PREFIXES: &[&str] = &["IMAGE_REANIM_", "IMAGE_"];
+pub const IMAGE_PREFIXES: &[&str] = &["IMAGE_REANIM_", "IMAGE_"];
 
-#[derive(Parser)]
-#[command(name = "reanim_makefile_gen")]
-struct Cli {
-    /// Directory containing .reanim files
-    #[arg(long)]
-    reanim: PathBuf,
-    /// Output path for the generated Makefile
-    #[arg(long)]
-    makefile_output: PathBuf,
-    /// Output directory for WebP files
-    #[arg(long)]
-    webp_output: PathBuf,
-    /// Additional directories to scan for image files (may be repeated)
-    #[arg(long)]
-    images_src: Vec<PathBuf>,
+#[derive(Debug, Clone)]
+pub struct ReanimFileInfo {
+    pub stem: String,
+    pub masks: Vec<String>,
+    pub images: Vec<String>,
 }
 
-fn discover_reanim_files(dir: &Path) -> Result<Vec<PathBuf>> {
+/// Discover all `.reanim` files in a directory.
+pub fn discover_reanim_files(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     let read_dir = std::fs::read_dir(dir)
         .with_context(|| format!("Failed to read directory: {}", dir.display()))?;
@@ -43,14 +33,8 @@ fn discover_reanim_files(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-struct ReanimFileInfo {
-    stem: String,
-    masks: Vec<String>,
-    images: Vec<String>,
-}
-
 /// Scan a directory for PNG/JPG files and build a map from lowercased stem -> full filename.
-fn scan_image_filenames(dir: &Path) -> HashMap<String, String> {
+pub fn scan_image_filenames(dir: &Path) -> HashMap<String, String> {
     let mut map = HashMap::new();
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
@@ -75,7 +59,7 @@ fn scan_image_filenames(dir: &Path) -> HashMap<String, String> {
 
 /// Resolve an XML image ref to the exact filename stem using the same
 /// prefix-stripping + lowercasing logic as `ImageDb::get`.
-fn resolve_xml_image_ref(xml_ref: &str, image_map: &HashMap<String, String>) -> Option<String> {
+pub fn resolve_xml_image_ref(xml_ref: &str, image_map: &HashMap<String, String>) -> Option<String> {
     for prefix in IMAGE_PREFIXES {
         if let Some(stripped) = xml_ref.strip_prefix(prefix) {
             let key = stripped.to_lowercase();
@@ -90,7 +74,7 @@ fn resolve_xml_image_ref(xml_ref: &str, image_map: &HashMap<String, String>) -> 
 
 /// Resolve an XML image ref against the reanim dir map first, then each images_src
 /// dir map in order, and return the full Makefile dependency path.
-fn resolve_image_dep_path(
+pub fn resolve_image_dep_path(
     xml_ref: &str,
     reanim_map: &HashMap<String, String>,
     images_src_maps: &[HashMap<String, String>],
@@ -108,7 +92,8 @@ fn resolve_image_dep_path(
     None
 }
 
-fn analyze_reanim_file(
+/// Analyze a single .reanim file and extract its metadata.
+pub fn analyze_reanim_file(
     path: &Path,
     reanim_map: &HashMap<String, String>,
     images_src_maps: &[HashMap<String, String>],
@@ -154,7 +139,7 @@ fn analyze_reanim_file(
 }
 
 /// Compute a relative path from `base` (a directory) to `target`.
-fn make_relative(base: &Path, target: &Path) -> PathBuf {
+pub fn make_relative(base: &Path, target: &Path) -> PathBuf {
     let base_components: Vec<_> = base.components().collect();
     let target_components: Vec<_> = target.components().collect();
 
@@ -179,7 +164,8 @@ fn make_relative(base: &Path, target: &Path) -> PathBuf {
     result
 }
 
-fn generate_makefile(
+/// Generate a Makefile for building all `.reanim` files.
+pub fn generate_makefile(
     makefile_path: &Path,
     reanim_dir: &Path,
     webp_output: &Path,
@@ -205,7 +191,7 @@ fn generate_makefile(
         content.push_str(&format!("IMAGES_SRC_DIR_{idx} := {}\n", images_src_out));
     }
     content.push_str(&format!("WEBP_OUTPUT := {}\n", webp_output_esc.trim_end_matches('/')));
-    content.push_str("BIN := pvz-reanim-rs\n");
+    content.push_str("BIN := pvz-reanim render\n");
     content.push_str("\n");
 
     if files.is_empty() {
@@ -226,7 +212,7 @@ fn generate_makefile(
         for info in files {
             let stem = &info.stem;
             content.push_str(&format!(
-                "$(WEBP_OUTPUT)/{stem}/.keep: $(REANIM_DIR)/{stem}.reanim {}",
+                "$(WEBP_OUTPUT)/{stem}/.keep: $(REANIM_DIR)/{stem}.reanim {}\n",
                 info.images.join(" ")
             ));
             content.push_str("\tmkdir -p $(dir $@)\n");
@@ -246,53 +232,6 @@ fn generate_makefile(
     }
     std::fs::write(makefile_path, content)
         .with_context(|| format!("Failed to write Makefile to {}", makefile_path.display()))?;
-
-    Ok(())
-}
-
-fn main() -> Result<()> {
-    let args = Cli::parse();
-
-    let reanim_files = discover_reanim_files(&args.reanim)?;
-
-    if reanim_files.is_empty() {
-        eprintln!(
-            "Warning: no .reanim files found in {}",
-            args.reanim.display()
-        );
-    }
-
-    let reanim_image_map = scan_image_filenames(&args.reanim);
-    let images_src_maps: Vec<HashMap<String, String>> = args
-        .images_src
-        .iter()
-        .map(|d| scan_image_filenames(d))
-        .collect();
-
-    let mut file_infos = Vec::new();
-    for path in &reanim_files {
-        match analyze_reanim_file(path, &reanim_image_map, &images_src_maps) {
-            Ok(info) => {
-                eprintln!("  {}: {} masks, {} images", info.stem, info.masks.len(), info.images.len());
-                file_infos.push(info);
-            }
-            Err(e) => {
-                eprintln!("Warning: skipping {}: {e}", path.display());
-            }
-        }
-    }
-
-    eprintln!("Found {} valid .reanim file(s)", file_infos.len());
-
-    generate_makefile(
-        &args.makefile_output,
-        &args.reanim,
-        &args.webp_output,
-        &args.images_src,
-        &file_infos,
-    )?;
-
-    eprintln!("Makefile written to: {}", args.makefile_output.display());
 
     Ok(())
 }

@@ -810,13 +810,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "pvz-reanim-rs"
+name = "pvz-reanim"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "clap",
  "env_logger",
  "log",
  "rayon",
+ "reanim_makefile_gen",
  "reanim_parser",
  "reanim_renderer",
 ]
@@ -970,7 +972,6 @@ name = "reanim_makefile_gen"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "clap",
  "reanim_parser",
  "reanim_renderer",
 ]
