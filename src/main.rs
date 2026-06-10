@@ -10,7 +10,7 @@ use reanim_renderer::*;
 struct Cli {
     /// Path to the .reanim file
     reanim_file: PathBuf,
-    /// Output GIF path (defaults to <reanim_stem>.gif)
+    /// Output WebP path (defaults to <reanim_stem>.webp)
     output: Option<PathBuf>,
     /// Additional directories to scan for image files (may be repeated)
     #[arg(long)]
@@ -49,16 +49,16 @@ fn main() {
 
     let masks = find_anim_masks(&def);
     if masks.is_empty() {
-        // No masks — render all frames to a single GIF
-        let output = output_base.with_extension("gif");
+        // No masks — render all frames to a single animated WebP
+        let output = output_base.with_extension("webp");
         log::info!("No anim_* masks found, rendering full animation to {}", output.display());
-        if let Err(e) = render_to_gif(&def, &images, (100, 100), &output) {
+        if let Err(e) = render_to_webp(&def, &images, (100, 100), &output) {
             log::error!("Render error: {e}");
             std::process::exit(1);
         }
         log::info!("Done: {}", output.display());
     } else {
-        // One GIF per mask
+        // One WebP per mask
         log::info!("Found {} anim_* masks:", masks.len());
         for m in &masks {
             log::info!("  {}: frames {}-{}", m.name, m.frame_start, m.frame_end);
@@ -66,9 +66,9 @@ fn main() {
         let results: Vec<_> = masks
             .par_iter()
             .map(|mask| {
-                let output = output_base.with_extension(format!("{}.gif", mask.name));
+                let output = output_base.with_extension(format!("{}.webp", mask.name));
                 log::info!("Rendering mask '{}' -> {}", mask.name, output.display());
-                render_range_to_gif(&def, &images, (100, 100), &output,
+                render_range_to_webp(&def, &images, (100, 100), &output,
                                      mask.frame_start, mask.frame_end)
             })
             .collect();

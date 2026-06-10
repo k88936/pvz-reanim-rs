@@ -991,6 +991,7 @@ dependencies = [
  "anyhow",
  "glam",
  "image",
+ "image-webp",
  "log",
  "reanim_parser",
 ]

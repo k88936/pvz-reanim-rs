@@ -7,5 +7,6 @@ edition = "2021"
 reanim_parser = { path = "../reanim_parser" }
 anyhow = "1"
 image = "0.25"
+image-webp = "0.2.4"
 glam = "0.29"
 log = "0.4"
