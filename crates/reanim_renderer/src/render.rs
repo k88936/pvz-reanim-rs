@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use image::{RgbaImage, Rgba};
-use image_webp::{ColorType, WebPEncoder};
+use webp_animation::Encoder;
 use reanim_parser::*;
 
 const IMAGE_PREFIXES: &[&str] = &["IMAGE_REANIM_", "IMAGE_"];
@@ -373,97 +373,6 @@ pub fn find_anim_masks(def: &ReanimatorDefinition) -> Vec<AnimMask> {
     masks
 }
 
-/// Encode a single RGBA frame to a VP8L bitstream (extracted from a simple lossless WebP).
-fn encode_vp8l_frame(data: &[u8], width: u32, height: u32) -> Vec<u8> {
-    let mut buf = Vec::new();
-    WebPEncoder::new(&mut buf)
-        .encode(data, width, height, ColorType::Rgba8)
-        .unwrap();
-
-    // Simple lossless WebP layout:
-    // [0..4]   "RIFF"
-    // [4..8]   file size (little-endian u32)
-    // [8..12]  "WEBP"
-    // [12..16] "VP8L"
-    // [16..20] VP8L chunk data size (little-endian u32)
-    // [20..]   VP8L bitstream data
-    let vp8l_data_size = u32::from_le_bytes(buf[16..20].try_into().unwrap()) as usize;
-    buf[20..20 + vp8l_data_size].to_vec()
-}
-
-/// Build a complete animated WebP from frame VP8L bitstreams.
-fn build_animated_webp(
-    frames: &[Vec<u8>],
-    width: u32,
-    height: u32,
-    loop_count: u16,
-    frame_duration_ms: u32,
-) -> Vec<u8> {
-    let mut output = Vec::new();
-
-    // Reserve space for RIFF header (will patch the file size later)
-    output.extend_from_slice(b"RIFF");
-    output.extend_from_slice(&[0u8; 4]); // placeholder for file size
-    output.extend_from_slice(b"WEBP");
-
-    // --- VP8X chunk (10 bytes of data) ---
-    let mut vp8x_data = Vec::with_capacity(10);
-    vp8x_data.push(0b0000_0010); // flags: animation bit set
-    vp8x_data.extend_from_slice(&[0u8; 3]); // reserved
-    vp8x_data.extend_from_slice(&(width - 1).to_le_bytes()[..3]); // canvas width - 1
-    vp8x_data.extend_from_slice(&(height - 1).to_le_bytes()[..3]); // canvas height - 1
-
-    output.extend_from_slice(b"VP8X");
-    output.extend_from_slice(&(vp8x_data.len() as u32).to_le_bytes());
-    output.extend_from_slice(&vp8x_data);
-
-    // --- ANIM chunk (6 bytes of data) ---
-    let mut anim_data = Vec::with_capacity(6);
-    anim_data.extend_from_slice(&[0u8; 4]); // background color (BGRA) - default black
-    anim_data.extend_from_slice(&loop_count.to_le_bytes());
-
-    output.extend_from_slice(b"ANIM");
-    output.extend_from_slice(&(anim_data.len() as u32).to_le_bytes());
-    output.extend_from_slice(&anim_data);
-
-    // --- ANMF chunks ---
-    for vp8l_data in frames {
-        // ANMF header (16 bytes before subchunk)
-        let mut anmf_data = Vec::with_capacity(32);
-
-        // Frame position and size (3 bytes each, little-endian)
-        anmf_data.extend_from_slice(&[0u8; 3]); // frame X offset
-        anmf_data.extend_from_slice(&[0u8; 3]); // frame Y offset
-        anmf_data.extend_from_slice(&(width - 1).to_le_bytes()[..3]); // frame width - 1
-        anmf_data.extend_from_slice(&(height - 1).to_le_bytes()[..3]); // frame height - 1
-        anmf_data.extend_from_slice(&frame_duration_ms.to_le_bytes()[..3]); // frame duration (3 bytes)
-        anmf_data.push(0b0000_0010); // flags: dispose to background, no blend
-
-        // VP8L sub-chunk inside the ANMF
-        anmf_data.extend_from_slice(b"VP8L");
-        anmf_data.extend_from_slice(&(vp8l_data.len() as u32).to_le_bytes());
-        anmf_data.extend_from_slice(vp8l_data);
-        // VP8L sub-chunk padding
-        if vp8l_data.len() % 2 == 1 {
-            anmf_data.push(0);
-        }
-
-        // ANMF chunk: header + data
-        output.extend_from_slice(b"ANMF");
-        output.extend_from_slice(&(anmf_data.len() as u32).to_le_bytes());
-        output.extend_from_slice(&anmf_data);
-        // ANMF chunk padding
-        if anmf_data.len() % 2 == 1 {
-            output.push(0);
-        }
-    }
-
-    // Patch the RIFF file size
-    let file_size = (output.len() as u32).wrapping_sub(8);
-    output[4..8].copy_from_slice(&file_size.to_le_bytes());
-
-    output
-}
 
 /// Render a specific frame range to an animated WebP.
 pub fn render_range_to_webp<P: AsRef<Path>>(
@@ -492,24 +401,28 @@ pub fn render_range_to_webp<P: AsRef<Path>>(
         frame_duration_ms,
     );
 
-    // Render all frames to RGBA, then encode to VP8L bitstreams
-    let mut vp8l_frames: Vec<Vec<u8>> = Vec::with_capacity(range_len as usize);
+    // Use webp-animation encoder
+    let mut encoder = Encoder::new((bbox.render_w as u32, bbox.render_h as u32))
+        .map_err(|e| anyhow::anyhow!("Failed to create WebP encoder: {e}"))?;
+
     for abs_idx in frame_start..=frame_end {
         let rgba = render_frame(def, abs_idx, total_frames, images, &bbox);
-        let (w, h) = rgba.dimensions();
-        let vp8l = encode_vp8l_frame(&rgba.into_raw(), w, h);
-        vp8l_frames.push(vp8l);
+        let timestamp_ms = (abs_idx - frame_start) * frame_duration_ms as i32;
+        encoder.add_frame(&rgba.into_raw(), timestamp_ms)
+            .map_err(|e| anyhow::anyhow!("Failed to add frame {abs_idx}: {e}"))?;
         log::info!(
-            "Frame {}/{} (abs {}) encoded ({} bytes VP8L)",
+            "Frame {}/{} (abs {}) added at {}ms",
             abs_idx - frame_start + 1,
             range_len,
             abs_idx,
-            vp8l_frames.last().map(|v| v.len()).unwrap_or(0),
+            timestamp_ms,
         );
     }
 
-    // Assemble animated WebP and write to disk
-    let webp_data = build_animated_webp(&vp8l_frames, bbox.render_w as u32, bbox.render_h as u32, 0, frame_duration_ms);
+    let final_timestamp_ms = range_len * frame_duration_ms as i32;
+    let webp_data = encoder.finalize(final_timestamp_ms)
+        .map_err(|e| anyhow::anyhow!("Failed to finalize WebP encoding: {e}"))?;
+
     std::fs::write(output.as_ref(), &webp_data)?;
 
     Ok(())
